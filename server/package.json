@@ -1,0 +1,36 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "Sample Server",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pulkitsinghal/sample-notifier-service.git"
+  },
+  "keywords": [
+    "websocket",
+    "socket",
+    "notification",
+    "notify",
+    "background",
+    "worker",
+    "task",
+    "job",
+    "status"
+  ],
+  "author": "pulkit@shoppinpal.com",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/pulkitsinghal/sample-notifier-service/issues"
+  },
+  "homepage": "https://github.com/pulkitsinghal/sample-notifier-service#readme",
+  "dependencies": {
+    "body-parser": "1.15.2",
+    "express": "4.14.0",
+    "redis": "2.6.2",
+    "socket.io-client": "1.5.0"
+  }
+}

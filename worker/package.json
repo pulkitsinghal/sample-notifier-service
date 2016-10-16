@@ -1,0 +1,34 @@
+{
+  "name": "worker",
+  "version": "1.0.0",
+  "description": "Sample Worker",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pulkitsinghal/sample-notifier-service.git"
+  },
+  "keywords": [
+    "websocket",
+    "socket",
+    "notification",
+    "notify",
+    "background",
+    "worker",
+    "task",
+    "job",
+    "status"
+  ],
+  "author": "pulkit@shoppinpal.com",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/pulkitsinghal/sample-notifier-service/issues"
+  },
+  "homepage": "https://github.com/pulkitsinghal/sample-notifier-service#readme",
+  "dependencies": {
+    "redis": "2.6.2",
+    "request": "2.75.0"
+  }
+}

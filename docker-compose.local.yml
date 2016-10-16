@@ -1,0 +1,36 @@
+version: '2'
+services:
+  server:
+    build:
+      context: ./server/
+      dockerfile: Dockerfile.server
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./server:/apps/server
+    depends_on:
+      - notifier
+      - queue
+      - worker
+  notifier:
+    build:
+      context: ./notifier/
+      dockerfile: Dockerfile.notifier
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./notifier:/apps/notifier
+  worker:
+    build:
+      context: ./worker/
+      dockerfile: Dockerfile.worker
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./worker:/apps/worker
+    depends_on:
+      - queue
+  queue:
+    image: redis:2.8
+    ports:
+      - "6379:6379"

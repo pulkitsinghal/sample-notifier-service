@@ -1,0 +1,4 @@
+FROM node:4
+WORKDIR "/apps/notifier"
+EXPOSE 3001
+ENTRYPOINT ["node", "notifier.js"]

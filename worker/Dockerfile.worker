@@ -1,0 +1,4 @@
+FROM node:4
+WORKDIR "/apps/worker"
+EXPOSE 3002
+ENTRYPOINT ["node", "worker.js"]

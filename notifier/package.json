@@ -1,0 +1,36 @@
+{
+  "name": "notifier",
+  "version": "1.0.0",
+  "description": "Notifier Service allows browsers to maintain active websocket connections with it so that later on it may let background worker notify browsers about the status of jobs/tasks.",
+  "main": "notifier.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pulkitsinghal/sample-notifier-service.git"
+  },
+  "keywords": [
+    "websocket",
+    "socket",
+    "notification",
+    "notify",
+    "background",
+    "worker",
+    "task",
+    "job",
+    "status"
+  ],
+  "author": "pulkit@shoppinpal.com",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/pulkitsinghal/sample-notifier-service/issues"
+  },
+  "homepage": "https://github.com/pulkitsinghal/sample-notifier-service#readme",
+  "dependencies": {
+    "body-parser": "1.15.2",
+    "express": "4.14.0",
+    "express-graceful-exit": "0.3.3",
+    "socket.io": "1.5.0"
+  }
+}
