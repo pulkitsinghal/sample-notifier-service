@@ -19,6 +19,9 @@
       * if the `notifier` service was updated to be backed by a pub/sub queue so that workers could publish notifications to the queue directly and all the notifier instances could subscribe to the queue then notifier service would scale better.
 * If `socketId` changes because the webapp is refreshed or the user restarts browser/tab:
   * Any background tasks that were kicked off before such an action will not be able to send notification. Because the previous websocket connection (referenced by the outdated socketId) will no longer be active.
+  * To workaround this, we would need to ask `notifier` to work with username instead of `socketId` for notifications. Here's a diagram that zooms in on proposed changes.
+    ![Alternative Architecture](/sequence%20diagram%202.png?raw=true "Alternative Architecture")
+    It does not show that the payload traveling between `webapp > webserver > queue > worker > notifier` will now contain `username` instead of `socketId` ... but hopefully that is obvious.
 
 ## Alternatives
 * [socket-redis](https://github.com/cargomedia/socket-redis) may be a great out-of-the-box scalable alternative to run as the `notifier` service
