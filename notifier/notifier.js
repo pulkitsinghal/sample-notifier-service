@@ -1,4 +1,33 @@
 /**
+ * Using custom instrumentation for websockets in NewRelic:
+ * https://blog.newrelic.com/2014/09/16/nodejs-custom-instrumentation/
+ */
+var newrelic;
+if (process.env.NEW_RELIC_ENABLED && process.env.NEW_RELIC_ENABLED.toLowerCase() === 'true' &&
+    process.env.NEW_RELIC_NO_CONFIG_FILE &&
+    process.env.NEW_RELIC_LICENSE_KEY &&
+    process.env.NEW_RELIC_APP_NAME &&
+    process.env.NEW_RELIC_LOG_LEVEL)
+{
+    console.log('starting newrelic agent');
+    newrelic = require('newrelic');
+}
+else {
+    console.log('skipped newrelic agent');
+    var mockInterface = {
+        createWebTransaction: function(aString, aFunction){
+            console.log(arguments);
+            console.log('running createWebTransaction via mockInterface for newrelic');
+            return aFunction;
+        },
+        endTransaction: function(){
+            console.log('running endTransaction via mockInterface for newrelic\n\n\n');
+        }
+    };
+    newrelic = mockInterface;
+}
+
+/**
  * Starting point for the notifier logic/idea was:
  * https://github.com/mminer/blog-code/blob/master/pattern-for-async-task-queue-results/notifier.js
  */
@@ -13,6 +42,7 @@ var onConnection = function(socket) {
     console.log('new connection established on socket ID:', socket.id);
     console.log('all currently connected socket IDs:', Object.keys(io.sockets.connected));
     socket.emit('register', socket.id);
+    newrelic.endTransaction();
 };
 io.on('connection', onConnection);
 

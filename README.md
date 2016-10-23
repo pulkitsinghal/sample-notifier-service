@@ -25,3 +25,16 @@
 
 ## Alternatives
 * [socket-redis](https://github.com/cargomedia/socket-redis) may be a great out-of-the-box scalable alternative to run as the `notifier` service
+
+## NewRelic
+
+1. Sockets aren't monitored by NewRelic, by default, so the code uses [custom instrumentation](https://blog.newrelic.com/2014/09/16/nodejs-custom-instrumentation/)
+1. Setup the environment variables:
+
+  ```
+  export NEW_RELIC_NO_CONFIG_FILE=1
+  export NEW_RELIC_ENABLED=true
+  export NEW_RELIC_LICENSE_KEY=
+  export NEW_RELIC_APP_NAME=notifier-service
+  export NEW_RELIC_LOG_LEVEL=info
+  ```
