@@ -8,6 +8,6 @@ tasksQueue.on('message', function (channel, message) {
     console.log('channel:', channel, 'message:', message);
     console.log('TODO: notify browser that worker is finished');
     request.debug = true;
-    request.post('http://notifier:3001/notify', {form:{clientId:message, result: Date.now()}});
-    //request.post('http://notifier:3001/notify', {json:{clientId:message}});
+    request.post('http://notifier:3001/notify', {form:{notificationId:message, result: Date.now()}});
+    //request.post('http://notifier:3001/notify', {json:{notificationId:message}});
 });

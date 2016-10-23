@@ -26,9 +26,9 @@ Result: <span id="result"></span>
         clientId = id;
     });
 
-    client.on('notify', function(result) {
-        console.log('notification received:', result);
-        resultElement.textContent = result;
+    client.on('notify', function(notification) {
+        console.log('notification received:', notification);
+        resultElement.textContent = notification.result;
     });
 
     document.querySelector('button').onclick = function() {
