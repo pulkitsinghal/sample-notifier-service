@@ -25,3 +25,12 @@
 
 ## Alternatives
 * [socket-redis](https://github.com/cargomedia/socket-redis) may be a great out-of-the-box scalable alternative to run as the `notifier` service
+
+## Publishing to DockerHub
+
+```
+docker login
+cd notifier
+docker build -t orgName/imageName .
+docker push orgName/imageName
+```
