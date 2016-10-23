@@ -28,9 +28,24 @@
 
 ## Publishing to DockerHub
 
-```
-docker login
-cd notifier
-docker build -t orgName/imageName .
-docker push orgName/imageName
-```
+1. Build & Publish
+
+  ```
+  docker login
+  cd notifier
+  docker build -t orgName/imageName .
+  docker push orgName/imageName
+  ```
+2. Run locally for testing
+
+  ```
+  docker run \
+    --publish 3001:3001 \
+    --detach \
+    orgName/imageName
+  ```
+3. Peek inside the built image
+
+  ```
+  docker run -i -t orgName/imageName /bin/bash
+  ```
