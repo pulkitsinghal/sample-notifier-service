@@ -49,3 +49,13 @@
   ```
   docker run -i -t orgName/imageName /bin/bash
   ```
+
+## Tips and Tricks
+
+* Simple way to test the notification endpoint:
+  ```
+  curl -XPOST \
+    --data-urlencode "notificationId=aaa" \
+    --data-urlencode "message=testing123" \
+    http://localhost:3001/notify
+  ```
