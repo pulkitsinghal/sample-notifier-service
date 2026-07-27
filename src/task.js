@@ -19,7 +19,11 @@ export function parseTaskMessage(body) {
   return message;
 }
 
-export async function presentJob(job) {
+export function isTerminalTask(status) {
+  return status === "completed" || status === "failed";
+}
+
+export async function presentJob(job, acknowledgement = null) {
   const rawState = await job.getState();
   const status = TASK_STATES.get(rawState) ?? "queued";
 
@@ -32,6 +36,9 @@ export async function presentJob(job) {
     createdAt: new Date(job.timestamp).toISOString(),
     result: status === "completed" ? job.returnvalue : null,
     error: status === "failed" ? "Task failed after all retry attempts." : null,
+    delivery: {
+      acknowledgedAt: acknowledgement?.acknowledgedAt ?? null,
+    },
   };
 }
 

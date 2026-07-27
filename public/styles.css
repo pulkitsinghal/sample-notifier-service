@@ -234,6 +234,25 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.task__ack {
+  min-height: 2.2rem;
+  margin: 0 0.7rem 0.65rem 0;
+  padding: 0 0.8rem;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 0.8rem;
+}
+
+.task__ack:hover {
+  background: #e8e4d9;
+}
+
+.task__ack:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 .task__id {
   color: #66736e;
   font-size: 0.72rem;

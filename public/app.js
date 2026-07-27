@@ -83,6 +83,14 @@ function renderTask(task) {
     (task.status === "running"
       ? "The worker has claimed this job."
       : "Waiting for a worker.");
+
+  const acknowledgement = element.querySelector(".task__ack");
+  const acknowledgedAt = task.delivery?.acknowledgedAt;
+  const terminal = task.status === "completed" || task.status === "failed";
+  acknowledgement.hidden = !terminal;
+  acknowledgement.disabled = Boolean(acknowledgedAt);
+  acknowledgement.dataset.taskId = task.taskId;
+  acknowledgement.textContent = acknowledgedAt ? "Seen" : "Mark seen";
 }
 
 async function fetchTask(taskId) {
@@ -100,8 +108,25 @@ async function fetchTask(taskId) {
   renderTask(await response.json());
 }
 
-async function reconcileRememberedTasks() {
-  await Promise.allSettled(rememberedTaskIds().map(fetchTask));
+async function fetchRecentTasks() {
+  const response = await fetch("/api/tasks?limit=12", {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error("Could not load recent task state.");
+  }
+  const body = await response.json();
+  for (const task of body.tasks ?? []) {
+    rememberTask(task.taskId);
+    renderTask(task);
+  }
+}
+
+async function reconcileTasks() {
+  await Promise.allSettled([
+    fetchRecentTasks(),
+    ...rememberedTaskIds().map(fetchTask),
+  ]);
 }
 
 form.addEventListener("submit", async (event) => {
@@ -139,6 +164,31 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+taskList.addEventListener("click", async (event) => {
+  const button = event.target.closest(".task__ack");
+  if (!button || button.disabled) {
+    return;
+  }
+  button.disabled = true;
+  try {
+    const response = await fetch(
+      `/api/tasks/${encodeURIComponent(button.dataset.taskId)}/ack`,
+      {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      },
+    );
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body.error ?? "Could not acknowledge this task.");
+    }
+    await fetchTask(button.dataset.taskId);
+  } catch (error) {
+    formError.textContent = error.message;
+    button.disabled = false;
+  }
+});
+
 const socket = io({
   transports: ["websocket"],
 });
@@ -146,7 +196,7 @@ const socket = io({
 socket.on("connect", () => {
   connectionDot.dataset.connected = "true";
   connectionStatus.textContent = "Live notifications connected";
-  void reconcileRememberedTasks();
+  void reconcileTasks();
 });
 
 socket.on("disconnect", () => {
@@ -165,4 +215,4 @@ socket.on("task:update", (event) => {
   }
 });
 
-void reconcileRememberedTasks();
+void reconcileTasks();

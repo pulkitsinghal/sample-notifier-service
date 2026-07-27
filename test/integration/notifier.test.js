@@ -59,20 +59,53 @@ function waitForSocket(socket, eventName, predicate = () => true) {
   });
 }
 
-async function waitForCompleted(url, cookie, taskId) {
+async function waitForTask(url, cookie, taskId, predicate) {
+  const headers =
+    typeof cookie === "string" ? { Cookie: cookie } : cookie;
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const response = await fetch(`${url}/api/tasks/${taskId}`, {
-      headers: { Cookie: cookie },
+      headers,
     });
     assert.equal(response.status, 200);
     const task = await response.json();
-    if (task.status === "completed") {
+    if (predicate(task)) {
       return task;
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error("Task did not complete");
+  throw new Error("Task did not reach the expected state");
+}
+
+async function waitForCompleted(url, cookie, taskId) {
+  return waitForTask(
+    url,
+    cookie,
+    taskId,
+    (task) => task.status === "completed",
+  );
+}
+
+function expectNoSocketEvent(
+  socket,
+  eventName,
+  predicate,
+  durationMs = 250,
+) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.off(eventName, onEvent);
+      resolve();
+    }, durationMs);
+    function onEvent(value) {
+      if (predicate(value)) {
+        clearTimeout(timeout);
+        socket.off(eventName, onEvent);
+        reject(new Error(`Unexpected ${eventName}`));
+      }
+    }
+    socket.on(eventName, onEvent);
+  });
 }
 
 integrationTest(
@@ -242,13 +275,230 @@ integrationTest(
     assert.equal(createResponse.status, 202);
     const created = await createResponse.json();
 
-    const task = await waitForCompleted(
+    const task = await waitForTask(
       url,
       sessionCookie,
       created.taskId,
+      (value) =>
+        value.status === "completed" &&
+        value.attemptsMade === 3,
     );
     assert.equal(processorCalls, 3);
     assert.equal(task.attemptsMade, 3);
     assert.equal(task.result.summary, "Recovered: retryable task");
+  },
+);
+
+integrationTest(
+  "OIDC identity replays unacknowledged work across devices and enforces limits",
+  async (context) => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const tokenVerifier = async (token) => {
+      if (token === "invalid-token") {
+        throw new Error("invalid");
+      }
+      const exp = Math.floor(Date.now() / 1000) + 300;
+      if (token === "expiring-token") {
+        return {
+          payload: {
+            sub: "user-1",
+            tenant_id: "tenant-a",
+            exp: Math.floor(Date.now() / 1000) + 1,
+          },
+        };
+      }
+      const identities = {
+        "first-token": { sub: "user-1", tenant_id: "tenant-a", exp },
+        "refreshed-token": { sub: "user-1", tenant_id: "tenant-a", exp },
+        "other-user": { sub: "user-2", tenant_id: "tenant-a", exp },
+        "other-tenant": { sub: "user-1", tenant_id: "tenant-b", exp },
+      };
+      return { payload: identities[token] };
+    };
+    const shared = {
+      redisUrl,
+      queueName: `notifier-oidc-${suffix}`,
+      eventChannel: `notifier-oidc-${suffix}:events`,
+      sessionSecret: "oidc-test-secret-that-is-at-least-32-bytes",
+      publicOrigin: null,
+      isProduction: false,
+      authMode: "oidc",
+      oidcTenantClaim: "tenant_id",
+      tokenVerifier,
+      taskRateLimit: 2,
+      taskRateWindowSeconds: 60,
+      taskRetentionSeconds: 600,
+      logger,
+    };
+    const api = await createNotifierApi({ ...shared, port: 0 });
+    const worker = await createTaskWorker({
+      ...shared,
+      taskDelayMs: 30,
+      workerConcurrency: 1,
+    });
+    const url = baseUrl(await api.start());
+    const authorization = {
+      Authorization: "Bearer first-token",
+    };
+    const refreshedAuthorization = {
+      Authorization: "Bearer refreshed-token",
+    };
+    const sockets = [];
+
+    context.after(async () => {
+      for (const socket of sockets) {
+        socket.disconnect();
+      }
+      await api.queue.obliterate({ force: true });
+      await Promise.all([worker.close(), api.close()]);
+    });
+
+    const createResponse = await fetch(`${url}/api/tasks`, {
+      method: "POST",
+      headers: {
+        ...authorization,
+        Origin: url,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ message: "cross-device task" }),
+    });
+    assert.equal(createResponse.status, 202);
+    const created = await createResponse.json();
+    const completed = await waitForCompleted(
+      url,
+      authorization,
+      created.taskId,
+    );
+    assert.equal(completed.delivery.acknowledgedAt, null);
+
+    const reconnected = createSocketClient(url, {
+      autoConnect: false,
+      auth: { token: "refreshed-token" },
+      extraHeaders: { Origin: url },
+      transports: ["websocket"],
+    });
+    sockets.push(reconnected);
+    const replayed = waitForSocket(
+      reconnected,
+      "task:update",
+      (event) => event.taskId === created.taskId && event.replayed === true,
+    );
+    reconnected.connect();
+    await replayed;
+
+    const acknowledgementResponse = await fetch(
+      `${url}/api/tasks/${created.taskId}/ack`,
+      {
+        method: "POST",
+        headers: {
+          ...refreshedAuthorization,
+          Origin: url,
+        },
+      },
+    );
+    assert.equal(acknowledgementResponse.status, 200);
+    const acknowledgement = await acknowledgementResponse.json();
+    assert.match(
+      acknowledgement.delivery.acknowledgedAt,
+      /^\d{4}-\d{2}-\d{2}T/,
+    );
+    const repeatedAcknowledgement = await fetch(
+      `${url}/api/tasks/${created.taskId}/ack`,
+      {
+        method: "POST",
+        headers: {
+          ...refreshedAuthorization,
+          Origin: url,
+        },
+      },
+    );
+    assert.equal(repeatedAcknowledgement.status, 200);
+    assert.equal(
+      (await repeatedAcknowledgement.json()).delivery.acknowledgedAt,
+      acknowledgement.delivery.acknowledgedAt,
+    );
+
+    for (const token of ["other-user", "other-tenant"]) {
+      const forbidden = await fetch(`${url}/api/tasks/${created.taskId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(forbidden.status, 404);
+    }
+
+    const recentResponse = await fetch(`${url}/api/tasks`, {
+      headers: refreshedAuthorization,
+    });
+    assert.equal(recentResponse.status, 200);
+    const recent = await recentResponse.json();
+    assert.equal(recent.tasks[0].taskId, created.taskId);
+    assert.equal(
+      recent.tasks[0].delivery.acknowledgedAt,
+      acknowledgement.delivery.acknowledgedAt,
+    );
+
+    const secondResponse = await fetch(`${url}/api/tasks`, {
+      method: "POST",
+      headers: {
+        ...refreshedAuthorization,
+        Origin: url,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ message: "within limit" }),
+    });
+    assert.equal(secondResponse.status, 202);
+    const limitedResponse = await fetch(`${url}/api/tasks`, {
+      method: "POST",
+      headers: {
+        ...authorization,
+        Origin: url,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ message: "over limit" }),
+    });
+    assert.equal(limitedResponse.status, 429);
+    assert.equal(limitedResponse.headers.get("x-ratelimit-remaining"), "0");
+    assert.ok(Number(limitedResponse.headers.get("retry-after")) >= 1);
+
+    reconnected.disconnect();
+    const afterAck = createSocketClient(url, {
+      autoConnect: false,
+      auth: { token: "refreshed-token" },
+      extraHeaders: { Origin: url },
+      transports: ["websocket"],
+    });
+    sockets.push(afterAck);
+    const ready = waitForSocket(afterAck, "notifier:ready");
+    const noAcknowledgedReplay = expectNoSocketEvent(
+      afterAck,
+      "task:update",
+      (event) => event.taskId === created.taskId,
+    );
+    afterAck.connect();
+    await ready;
+    await noAcknowledgedReplay;
+
+    const unauthenticated = await fetch(`${url}/api/tasks`);
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(
+      unauthenticated.headers.get("www-authenticate"),
+      "Bearer",
+    );
+
+    const expiring = createSocketClient(url, {
+      autoConnect: false,
+      auth: { token: "expiring-token" },
+      extraHeaders: { Origin: url },
+      transports: ["websocket"],
+    });
+    sockets.push(expiring);
+    const expiringConnected = waitForSocket(expiring, "connect");
+    const expiredDisconnect = waitForSocket(
+      expiring,
+      "disconnect",
+      (reason) => reason === "io server disconnect",
+    );
+    expiring.connect();
+    await expiringConnected;
+    await expiredDisconnect;
   },
 );

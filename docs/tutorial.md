@@ -8,7 +8,8 @@ By the end of this lab, you should be able to explain:
 2. which data must be durable and which event may be ephemeral;
 3. why a socket ID is not authentication;
 4. how a disconnected browser recovers missed state; and
-5. what changes when API and worker processes scale independently.
+5. what an explicit delivery acknowledgement proves; and
+6. what changes when API and worker processes scale independently.
 
 The exercises run locally. They do not create cloud resources or use a paid
 service.
@@ -55,6 +56,7 @@ Observe:
 3. The worker saves the result before publishing a live update hint.
 4. The API instance with your socket emits `task:update`.
 5. The browser reads the task endpoint and renders the saved result.
+6. **Mark seen** stores an idempotent acknowledgement outside the socket.
 
 The browser never receives or submits its Socket.IO connection ID. Open
 Developer Tools and inspect the `POST /api/tasks` response: it contains a task
@@ -94,14 +96,20 @@ TASK_DELAY_MS=8000 docker compose up
 Queue a task, then close the tab before it finishes. Wait eight seconds and
 reopen <http://localhost:3000>.
 
-The original demo could not notify a new socket ID. This page remembers recent
-task IDs in local storage, keeps the anonymous session in a signed cookie, and
-reads each task from the API after load. The saved result appears even though
-the live socket event was missed.
+The original demo could not notify a new socket ID. This page keeps the
+anonymous identity in a signed cookie, indexes recent tasks by a server-derived
+owner key, and reads them from the API after load. Local storage remains a
+client-side fallback. The saved result appears even though the live socket
+event was missed.
 
-This proves result recovery for the same anonymous browser session. It does
-not claim human acknowledgement or cross-device delivery. Those require
-product-specific authenticated identity and receipt semantics.
+Do not choose **Mark seen**, close the tab, and open it again. The API replays
+the unacknowledged terminal task to the replacement socket. Now choose
+**Mark seen**. Repeating the acknowledgement returns the original timestamp,
+and later reconnects no longer replay that task.
+
+This local exercise proves recovery for one anonymous browser identity.
+Production mode applies the same mechanism to a validated tenant and subject
+across devices.
 
 ## 5. Exercise cross-instance fan-out
 
@@ -120,6 +128,12 @@ The test:
 5. receives the worker's completion through API B;
 6. proves another session cannot read the task; and
 7. disconnects the socket and recovers a later result through the task API.
+
+A second integration case runs the production identity contract without a
+vendor dependency. It proves token refresh and cross-device replay for the
+same tenant and subject, isolation across users and tenants, idempotent
+acknowledgement, suppression after acknowledgement, and Redis-backed `429`
+rate limiting.
 
 That is a bounded functional proof of the sample's scale-out design. It is not
 a load, chaos, or production failover test.
@@ -148,7 +162,6 @@ The local demo provides:
 
 - a random HMAC-signed session cookie;
 - HttpOnly and SameSite=Strict cookie attributes;
-- a Secure cookie when `NODE_ENV=production`;
 - exact-Origin checks for task creation;
 - server-derived, non-public Socket.IO rooms;
 - task ownership checks that return 404 across sessions;
@@ -157,21 +170,32 @@ The local demo provides:
 - an unprivileged, read-only application container; and
 - no host-published data-store port.
 
-It does not provide:
+Production mode adds:
 
-- user login, tenant authorization, or session revocation;
-- TLS termination or reverse-proxy configuration;
-- a production secret manager;
-- distributed rate limiting;
-- Redis ACLs, TLS, backup policy, or high availability;
-- audit/event retention policy;
-- notification acknowledgement; or
-- production deployment configuration.
+- JWT signature, algorithm, issuer, audience, expiration, subject, and tenant
+  validation against a fixed JWKS URL;
+- stable cross-device owner and room derivation without storing raw claims;
+- token-expiry disconnect for sockets;
+- Redis-backed per-identity task rate limiting;
+- recent-task indexing and explicit acknowledgement;
+- configurable bounded retention; and
+- startup enforcement for HTTPS origin and ACL-authenticated TLS Redis.
 
-Those are explicit owner and product decisions, not gaps to hide behind a
-tutorial default.
+The application still delegates login, consent, MFA, token issuance and
+revocation, tenant membership, and authorization policy to the chosen identity
+provider. It does not terminate TLS, create secrets, deploy Redis, configure
+backups, or choose compliance retention.
 
-## 8. Clean up
+## 8. Follow the production contract
+
+Read [the production guide](production.md). It shows the required environment,
+client authorization headers and Socket.IO handshake, Redis ACL/TLS boundary,
+acknowledgement semantics, and pre-deployment checklist.
+
+Do not copy the local Compose secret or anonymous identity into production.
+Production startup rejects that configuration.
+
+## 9. Clean up
 
 Stop containers while preserving recent Redis state:
 

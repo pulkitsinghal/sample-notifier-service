@@ -9,14 +9,15 @@ import helmet from "helmet";
 import IORedis from "ioredis";
 import { Server as SocketServer } from "socket.io";
 
-import { DEFAULT_JOB_OPTIONS, redisConnectionOptions } from "./queue.js";
+import { createIdentityService } from "./identity.js";
+import { consumeRateLimit } from "./rate-limit.js";
 import {
-  createSession,
-  deriveNotificationRoom,
-  readSessionId,
-  serializeSessionCookie,
-} from "./session.js";
+  jobOptions,
+  redisConnectionOptions,
+} from "./queue.js";
+import { TaskStore } from "./task-store.js";
 import {
+  isTerminalTask,
   parseTaskMessage,
   presentJob,
   publicTaskEvent,
@@ -26,6 +27,9 @@ const publicDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../public",
 );
+
+const TASK_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function expectedOrigin(request, configuredOrigin) {
   if (configuredOrigin) {
@@ -43,30 +47,6 @@ function expectedOrigin(request, configuredOrigin) {
 function originIsAllowed(request, configuredOrigin) {
   const origin = request.headers.origin;
   return Boolean(origin && origin === expectedOrigin(request, configuredOrigin));
-}
-
-function sessionMiddleware({ sessionSecret, secure }) {
-  return (request, response, next) => {
-    let sessionId = readSessionId(
-      request.headers.cookie,
-      sessionSecret,
-    );
-
-    if (!sessionId) {
-      const session = createSession(sessionSecret);
-      sessionId = session.sessionId;
-      response.setHeader(
-        "Set-Cookie",
-        serializeSessionCookie(session.token, { secure }),
-      );
-    }
-
-    request.notificationRoom = deriveNotificationRoom(
-      sessionId,
-      sessionSecret,
-    );
-    next();
-  };
 }
 
 function requireSameOrigin(configuredOrigin) {
@@ -88,8 +68,48 @@ function closeHttpServer(server) {
   });
 }
 
+function parseListLimit(value, fallback) {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!/^\d+$/.test(value)) {
+    const error = new Error("limit must be an integer between 1 and 100");
+    error.statusCode = 400;
+    throw error;
+  }
+  const limit = Number(value);
+  if (limit < 1 || limit > 100) {
+    const error = new Error("limit must be an integer between 1 and 100");
+    error.statusCode = 400;
+    throw error;
+  }
+  return limit;
+}
+
+function notFound(response) {
+  response.status(404).json({ error: "Task not found." });
+}
+
+function disconnectAtTokenExpiry(socket, expiresAt) {
+  if (!expiresAt) {
+    return;
+  }
+  let timer;
+  const schedule = () => {
+    const remaining = expiresAt * 1000 - Date.now();
+    if (remaining <= 0) {
+      socket.disconnect(true);
+      return;
+    }
+    timer = setTimeout(schedule, Math.min(remaining, 2_147_000_000));
+  };
+  schedule();
+  socket.once("disconnect", () => clearTimeout(timer));
+}
+
 export async function createNotifierApi({
   redisUrl,
+  redisTls = {},
   queueName,
   eventChannel,
   sessionSecret,
@@ -97,17 +117,31 @@ export async function createNotifierApi({
   host = "127.0.0.1",
   port = 3000,
   isProduction = false,
+  authMode = "anonymous",
+  oidcIssuer = null,
+  oidcAudience = null,
+  oidcJwksUrl = null,
+  oidcAlgorithms = ["RS256"],
+  oidcTenantClaim = "tenant_id",
+  tokenVerifier = null,
+  taskRetentionSeconds = 24 * 60 * 60,
+  taskRateLimit = 30,
+  taskRateWindowSeconds = 60,
+  replayLimit = 50,
   logger = console,
 }) {
+  const connection = redisConnectionOptions(redisUrl, redisTls);
   const queue = new Queue(queueName, {
-    connection: redisConnectionOptions(redisUrl),
-    defaultJobOptions: DEFAULT_JOB_OPTIONS,
+    connection,
+    defaultJobOptions: jobOptions(taskRetentionSeconds),
   });
-  const subscriber = new IORedis(redisUrl, {
+  const subscriber = new IORedis({
+    ...connection,
     lazyConnect: true,
     maxRetriesPerRequest: null,
   });
-  const healthRedis = new IORedis(redisUrl, {
+  const controlRedis = new IORedis({
+    ...connection,
     lazyConnect: true,
     maxRetriesPerRequest: 1,
   });
@@ -115,52 +149,111 @@ export async function createNotifierApi({
   subscriber.on("error", (error) => {
     logger.error("Notification subscriber error", error.message);
   });
-  healthRedis.on("error", () => {
-    // Readiness reports the failure without logging connection details.
+  controlRedis.on("error", () => {
+    // Readiness reports failures without logging connection details.
   });
 
   await Promise.all([
     queue.waitUntilReady(),
     subscriber.connect(),
-    healthRedis.connect(),
+    controlRedis.connect(),
   ]);
+
+  const taskStore = new TaskStore(controlRedis, {
+    namespace: queueName,
+    retentionSeconds: taskRetentionSeconds,
+  });
+  const identities = createIdentityService({
+    authMode,
+    sessionSecret,
+    taskRetentionSeconds,
+    secureCookies: isProduction,
+    oidcIssuer,
+    oidcAudience,
+    oidcJwksUrl,
+    oidcAlgorithms,
+    oidcTenantClaim,
+    tokenVerifier,
+  });
 
   const app = express();
   const httpServer = createServer(app);
   const io = new SocketServer(httpServer, {
     allowRequest: (request, callback) => {
       const allowed = originIsAllowed(request, publicOrigin);
-      callback(
-        allowed ? null : "origin is not allowed",
-        allowed,
-      );
+      callback(allowed ? null : "origin is not allowed", allowed);
     },
-    serveClient: true,
+    serveClient: !isProduction,
     transports: ["websocket"],
   });
 
-  io.use((socket, next) => {
-    const sessionId = readSessionId(
-      socket.request.headers.cookie,
-      sessionSecret,
-    );
-    if (!sessionId) {
-      next(new Error("session is required"));
-      return;
+  async function ownedJob(taskId, ownerKey) {
+    if (!TASK_ID_PATTERN.test(taskId)) {
+      return null;
     }
+    const job = await queue.getJob(taskId);
+    return job?.data.ownerKey === ownerKey ? job : null;
+  }
 
-    socket.data.notificationRoom = deriveNotificationRoom(
-      sessionId,
-      sessionSecret,
+  async function taskRepresentation(job) {
+    return presentJob(
+      job,
+      await taskStore.acknowledgement(String(job.id)),
     );
-    next();
+  }
+
+  async function recentTasks(ownerKey, limit) {
+    const taskIds = await taskStore.listTaskIds(ownerKey, limit);
+    const jobs = await Promise.all(
+      taskIds.map((taskId) => queue.getJob(taskId)),
+    );
+    const ownedJobs = jobs.filter(
+      (job) => job?.data.ownerKey === ownerKey,
+    );
+    return Promise.all(ownedJobs.map(taskRepresentation));
+  }
+
+  io.use(async (socket, next) => {
+    try {
+      socket.data.identity = await identities.authenticateSocket(socket);
+      next();
+    } catch {
+      next(new Error("authentication is required"));
+    }
   });
 
   io.on("connection", (socket) => {
-    socket.join(socket.data.notificationRoom);
+    const {
+      notificationRoom,
+      ownerKey,
+      expiresAt,
+    } = socket.data.identity;
+    disconnectAtTokenExpiry(socket, expiresAt);
+    socket.join(notificationRoom);
     socket.emit("notifier:ready", {
       connectedAt: new Date().toISOString(),
     });
+
+    void recentTasks(ownerKey, replayLimit)
+      .then((tasks) => {
+        for (const task of tasks) {
+          if (
+            isTerminalTask(task.status) &&
+            !task.delivery.acknowledgedAt
+          ) {
+            socket.emit("task:update", {
+              taskId: task.taskId,
+              status: task.status,
+              result: task.result,
+              error: task.error,
+              replayed: true,
+            });
+          }
+        }
+      })
+      .catch((error) => {
+        logger.warn("Could not replay pending task updates", error.message);
+      });
   });
 
   subscriber.on("message", (channel, payload) => {
@@ -206,7 +299,7 @@ export async function createNotifierApi({
 
   app.get("/health/ready", async (_request, response) => {
     try {
-      await healthRedis.ping();
+      await controlRedis.ping();
       response.json({ status: "ready" });
     } catch {
       response.status(503).json({ status: "not-ready" });
@@ -214,7 +307,17 @@ export async function createNotifierApi({
   });
 
   app.use(express.json({ limit: "8kb", strict: true }));
-  app.use(sessionMiddleware({ sessionSecret, secure: isProduction }));
+  app.use(async (request, response, next) => {
+    try {
+      request.identity = await identities.authenticateRequest(
+        request,
+        response,
+      );
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.get("/api/session", (_request, response) => {
     response.setHeader("Cache-Control", "no-store");
@@ -226,17 +329,49 @@ export async function createNotifierApi({
     requireSameOrigin(publicOrigin),
     async (request, response, next) => {
       try {
+        const rate = await consumeRateLimit(controlRedis, {
+          namespace: queueName,
+          ownerKey: request.identity.ownerKey,
+          limit: taskRateLimit,
+          windowSeconds: taskRateWindowSeconds,
+        });
+        response.setHeader("X-RateLimit-Limit", String(rate.limit));
+        response.setHeader(
+          "X-RateLimit-Remaining",
+          String(rate.remaining),
+        );
+        response.setHeader("X-RateLimit-Reset", String(rate.resetAt));
+        if (!rate.allowed) {
+          response.setHeader(
+            "Retry-After",
+            String(Math.max(1, rate.resetAt - Math.floor(Date.now() / 1000))),
+          );
+          response.status(429).json({
+            error: "Too many task requests. Try again after the rate limit resets.",
+          });
+          return;
+        }
+
         const message = parseTaskMessage(request.body);
         const taskId = randomUUID();
-        await queue.add(
-          "demo-task",
-          {
-            message,
-            notificationRoom: request.notificationRoom,
-            requestedAt: new Date().toISOString(),
-          },
-          { jobId: taskId },
-        );
+        await taskStore.remember(request.identity.ownerKey, taskId);
+        try {
+          await queue.add(
+            "demo-task",
+            {
+              message,
+              ownerKey: request.identity.ownerKey,
+              notificationRoom: request.identity.notificationRoom,
+              requestedAt: new Date().toISOString(),
+            },
+            { jobId: taskId },
+          );
+        } catch (error) {
+          await taskStore
+            .forget(request.identity.ownerKey, taskId)
+            .catch(() => {});
+          throw error;
+        }
 
         response
           .status(202)
@@ -248,39 +383,77 @@ export async function createNotifierApi({
     },
   );
 
-  app.get("/api/tasks/:taskId", async (request, response, next) => {
+  app.get("/api/tasks", async (request, response, next) => {
     try {
-      if (
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-          request.params.taskId,
-        )
-      ) {
-        response.status(404).json({ error: "Task not found." });
-        return;
-      }
-
-      const job = await queue.getJob(request.params.taskId);
-      if (
-        !job ||
-        job.data.notificationRoom !== request.notificationRoom
-      ) {
-        response.status(404).json({ error: "Task not found." });
-        return;
-      }
-
+      const limit = parseListLimit(request.query.limit, replayLimit);
       response.setHeader("Cache-Control", "no-store");
-      response.json(await presentJob(job));
+      response.json({
+        tasks: await recentTasks(request.identity.ownerKey, limit),
+      });
     } catch (error) {
       next(error);
     }
   });
 
-  app.use(
-    express.static(publicDirectory, {
-      etag: true,
-      maxAge: 0,
-    }),
+  app.get("/api/tasks/:taskId", async (request, response, next) => {
+    try {
+      const job = await ownedJob(
+        request.params.taskId,
+        request.identity.ownerKey,
+      );
+      if (!job) {
+        notFound(response);
+        return;
+      }
+
+      response.setHeader("Cache-Control", "no-store");
+      response.json(await taskRepresentation(job));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post(
+    "/api/tasks/:taskId/ack",
+    requireSameOrigin(publicOrigin),
+    async (request, response, next) => {
+      try {
+        const job = await ownedJob(
+          request.params.taskId,
+          request.identity.ownerKey,
+        );
+        if (!job) {
+          notFound(response);
+          return;
+        }
+
+        const task = await taskRepresentation(job);
+        if (!isTerminalTask(task.status)) {
+          response.status(409).json({
+            error: "Only completed or failed tasks can be acknowledged.",
+          });
+          return;
+        }
+
+        response.setHeader("Cache-Control", "no-store");
+        response.json({
+          taskId: String(job.id),
+          delivery: await taskStore.acknowledge(String(job.id)),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
   );
+
+  if (!isProduction) {
+    app.use(
+      express.static(publicDirectory, {
+        etag: true,
+        maxAge: 0,
+      }),
+    );
+  }
 
   app.use("/api", (_request, response) => {
     response.status(404).json({ error: "API route not found." });
@@ -296,6 +469,9 @@ export async function createNotifierApi({
           ? 413
           : 500;
 
+    if (error.authenticate) {
+      response.setHeader("WWW-Authenticate", error.authenticate);
+    }
     if (statusCode >= 500) {
       logger.error("Request failed", error.message);
     }
@@ -340,7 +516,7 @@ export async function createNotifierApi({
       await Promise.allSettled([
         queue.close(),
         subscriber.quit(),
-        healthRedis.quit(),
+        controlRedis.quit(),
       ]);
     },
   };

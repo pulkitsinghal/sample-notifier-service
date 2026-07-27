@@ -5,7 +5,6 @@ import {
 } from "node:crypto";
 
 export const SESSION_COOKIE_NAME = "notifier_session";
-export const SESSION_MAX_AGE_SECONDS = 60 * 60;
 
 function hmac(value, secret) {
   return createHmac("sha256", secret).update(value).digest("base64url");
@@ -79,14 +78,28 @@ export function createSession(secret) {
 }
 
 export function deriveNotificationRoom(sessionId, secret) {
-  return `session:${hmac(`room:${sessionId}`, secret)}`;
+  return deriveIdentityRoom("local", sessionId, secret);
 }
 
-export function serializeSessionCookie(token, { secure }) {
+export function deriveIdentityOwner(tenant, subject, secret) {
+  return hmac(`owner:${tenant}\0${subject}`, secret);
+}
+
+export function deriveIdentityRoom(tenant, subject, secret) {
+  return `identity:${hmac(`room:${tenant}\0${subject}`, secret)}`;
+}
+
+export function serializeSessionCookie(
+  token,
+  {
+    secure,
+    maxAgeSeconds = 24 * 60 * 60,
+  },
+) {
   const attributes = [
     `${SESSION_COOKIE_NAME}=${token}`,
     "Path=/",
-    `Max-Age=${SESSION_MAX_AGE_SECONDS}`,
+    `Max-Age=${maxAgeSeconds}`,
     "HttpOnly",
     "SameSite=Strict",
   ];
