@@ -5,12 +5,17 @@ x-app-environment: &app-environment
   HOST: 0.0.0.0
   PORT: 3000
   PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
+  AUTH_MODE: anonymous
   REDIS_URL: redis://redis:6379
   QUEUE_NAME: notifier-demo
   EVENT_CHANNEL: notifier-demo:events
   SESSION_SECRET: ${SESSION_SECRET:-local-tutorial-secret-change-before-production}
   TASK_DELAY_MS: ${TASK_DELAY_MS:-1200}
   WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+  TASK_RETENTION_SECONDS: ${TASK_RETENTION_SECONDS:-86400}
+  TASK_RATE_LIMIT: ${TASK_RATE_LIMIT:-30}
+  TASK_RATE_WINDOW_SECONDS: ${TASK_RATE_WINDOW_SECONDS:-60}
+  REPLAY_LIMIT: ${REPLAY_LIMIT:-50}
 
 x-app: &app
   build:
@@ -54,7 +59,7 @@ services:
     command: ["node", "src/start-worker.js"]
 
   redis:
-    image: redis:8.2.8-alpine
+    image: redis:8.2.8-alpine@sha256:a7859ed111db3c1f5404a973a4747505d559fb5ca32d37e447afc0ef845a2103
     command:
       [
         "redis-server",

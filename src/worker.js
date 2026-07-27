@@ -30,6 +30,7 @@ export async function runDemoTask(job, { taskDelayMs }) {
 
 export async function createTaskWorker({
   redisUrl,
+  redisTls = {},
   queueName,
   eventChannel,
   taskDelayMs = 1200,
@@ -37,7 +38,9 @@ export async function createTaskWorker({
   processor = runDemoTask,
   logger = console,
 }) {
-  const publisher = new IORedis(redisUrl, {
+  const connection = redisConnectionOptions(redisUrl, redisTls);
+  const publisher = new IORedis({
+    ...connection,
     lazyConnect: true,
     maxRetriesPerRequest: null,
   });
@@ -61,7 +64,7 @@ export async function createTaskWorker({
     queueName,
     (job) => processor(job, { taskDelayMs }),
     {
-      connection: redisConnectionOptions(redisUrl),
+      connection,
       concurrency: workerConcurrency,
     },
   );

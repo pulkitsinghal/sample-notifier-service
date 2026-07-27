@@ -1,7 +1,7 @@
 {
   "name": "sample-notifier-service",
   "version": "2.0.0",
-  "description": "A secure, reconnect-safe tutorial for notifying browsers when background jobs finish.",
+  "description": "A durable browser notification tutorial and provider-neutral production starter.",
   "private": true,
   "type": "module",
   "engines": {
@@ -21,6 +21,7 @@
     "express": "5.2.1",
     "helmet": "8.3.0",
     "ioredis": "5.11.1",
+    "jose": "6.2.4",
     "socket.io": "4.8.3"
   },
   "devDependencies": {

@@ -82,20 +82,40 @@ at-most-once delivery gaps. The browser therefore treats every socket event as
 a reason to read `GET /api/tasks/:taskId`, and it repeats that read on reconnect
 or page load.
 
-### Stable browser scope without pretending it is user authentication
+### Two explicit identity modes
 
-The API creates a random session identifier, signs it with HMAC-SHA-256, and
-stores it in an HttpOnly, SameSite=Strict cookie. A server-only HMAC-derived
-room is stored in the job. Socket middleware independently verifies the cookie
-and joins that room.
+Local tutorial mode creates a random session identifier, signs it with
+HMAC-SHA-256, and stores it in an HttpOnly, SameSite=Strict cookie.
 
-The browser cannot select a room, a guessed task ID does not grant access, and
-the internal room is removed from public events. Multiple tabs in the same
-anonymous session can receive the same result.
+Production mode accepts JWT access tokens from an external identity provider.
+It pins an asymmetric algorithm allowlist and validates the signature, issuer,
+audience, expiration, subject, and configured tenant claim against a fixed
+JWKS URL. The raw claims are not stored in task data. HMAC-derived owner and
+room keys bind the validated `(tenant, subject)` pair to tasks and sockets.
+The socket is disconnected when its validated token expires.
 
-This is appropriate for a local anonymous lab. A real application must derive
-rooms and task authorization from its authenticated subject and current
-authorization policy.
+In both modes the browser cannot select a room, a guessed task ID does not
+grant access, and the internal room is removed from public events. Production
+devices with refreshed tokens for the same tenant and subject resolve to the
+same owner, while a different tenant or subject receives a non-enumerating
+404.
+
+### Redelivery, acknowledgement, and bounded retention
+
+Each owner has a Redis sorted-set index of recent task IDs. A reconnect reads
+that index and replays terminal tasks without an acknowledgement. The
+authoritative `GET /api/tasks` and `GET /api/tasks/:id` responses still carry
+the task state, so the replay event remains only a wake-up.
+
+`POST /api/tasks/:id/ack` records the first acknowledgement timestamp with
+Redis `SET NX`. Repeating the request returns the same receipt, making the
+operation idempotent. This proves application receipt by an authenticated
+client; it does not prove a human read or acted on the result.
+
+Job state, owner indexes, and acknowledgements share
+`TASK_RETENTION_SECONDS` (24 hours by default, 5 minutes to 30 days allowed).
+Task creation uses a Redis-backed fixed-window limit scoped to the derived
+owner key. The default is 30 tasks per 60 seconds.
 
 ### Horizontal event fan-out
 
@@ -121,6 +141,19 @@ Content Security Policy, and inserts all task text with `textContent`.
 State-changing API requests require the configured exact Origin and bounded
 JSON input.
 
+Production configuration additionally fails closed unless:
+
+- `AUTH_MODE=oidc`;
+- `PUBLIC_ORIGIN` uses HTTPS;
+- the issuer and JWKS URLs use HTTPS;
+- an explicit JWT audience and tenant claim are configured; and
+- Redis uses `rediss://` with an ACL username and password.
+
+Private Redis certificate authorities and mutual-TLS client certificates can
+be mounted read-only and supplied by file path. The application never logs
+connection URLs, credentials, access tokens, certificate contents, or raw
+identity claims.
+
 Redis 8 is available under a choice of RSALv2, SSPLv1, or AGPLv3. The local
 sample pulls the unmodified official image, but selecting a license for
 redistribution or a product deployment remains an owner/legal decision; this
@@ -130,10 +163,14 @@ behalf.
 ## What is intentionally not claimed
 
 - Pub/Sub is not durable and no code calls it durable.
-- A successful socket emit is not proof that a human saw a notification.
+- A successful socket emit is not proof that a client received a notification.
+- A stored acknowledgement proves an authorized client called the endpoint,
+  not that a human saw or acted on the notification.
 - BullMQ retry does not make a non-idempotent business operation safe.
 - A local container test is not evidence of production capacity or failover.
-- The sample has no login, tenant model, regulated-data policy, deployment,
-  cloud secret integration, or paid service.
-- Retaining a recent job for one hour is a tutorial choice, not a universal
-  compliance or product requirement.
+- The sample delegates login, tenant membership, revocation policy, and token
+  issuance to an external provider; it does not implement those systems.
+- The repository has no regulated-data policy, deployment, cloud secret
+  integration, backup schedule, alerting, or paid service.
+- The configurable retention default is not a universal compliance or product
+  requirement.

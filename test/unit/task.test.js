@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isTerminalTask,
   parseTaskMessage,
   publicTaskEvent,
 } from "../../src/task.js";
@@ -44,4 +45,11 @@ test("invalid task events are ignored", () => {
     }),
     null,
   );
+});
+
+test("only completed and failed tasks are terminal acknowledgements", () => {
+  assert.equal(isTerminalTask("completed"), true);
+  assert.equal(isTerminalTask("failed"), true);
+  assert.equal(isTerminalTask("running"), false);
+  assert.equal(isTerminalTask("queued"), false);
 });

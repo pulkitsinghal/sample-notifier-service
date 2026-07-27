@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createSession,
+  deriveIdentityOwner,
   deriveNotificationRoom,
   readSessionId,
   serializeSessionCookie,
@@ -42,6 +43,22 @@ test("cookie parsing and room derivation do not expose socket IDs", () => {
   );
 
   const room = deriveNotificationRoom(sessionId, SECRET);
-  assert.match(room, /^session:[A-Za-z0-9_-]{43}$/);
+  assert.match(room, /^identity:[A-Za-z0-9_-]{43}$/);
   assert.doesNotMatch(room, new RegExp(sessionId));
+});
+
+test("tenant and subject derive stable, isolated owner keys", () => {
+  const first = deriveIdentityOwner("tenant-a", "user-1", SECRET);
+  assert.equal(
+    first,
+    deriveIdentityOwner("tenant-a", "user-1", SECRET),
+  );
+  assert.notEqual(
+    first,
+    deriveIdentityOwner("tenant-b", "user-1", SECRET),
+  );
+  assert.notEqual(
+    first,
+    deriveIdentityOwner("tenant-a", "user-2", SECRET),
+  );
 });

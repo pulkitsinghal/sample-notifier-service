@@ -56,7 +56,8 @@
           <h2 id="results-heading">Observe state reconciliation</h2>
           <p>
             Socket events trigger an immediate refresh. Reloading the page
-            asks the API for the same task state, so a missed event is harmless.
+            asks the API for recent task state, and “Mark seen” records an
+            explicit delivery acknowledgement.
           </p>
         </div>
         <ol id="task-list" class="task-list" aria-live="polite">
@@ -70,8 +71,9 @@
         <p class="step">Core lesson</p>
         <p>
           A socket ID identifies one transport connection; it is neither an
-          identity nor a delivery receipt. This demo routes through a
-          server-derived session room and keeps the task result in the queue.
+          identity nor a delivery receipt. Local mode uses a server-derived
+          session identity; production mode requires validated tenant and user
+          claims. Both keep results and acknowledgements outside the socket.
         </p>
         <a
           href="https://github.com/pulkitsinghal/sample-notifier-service/blob/master/docs/tutorial.md"
@@ -87,6 +89,7 @@
         </div>
         <p class="task__message"></p>
         <p class="task__result"></p>
+        <button class="task__ack" type="button" hidden>Mark seen</button>
         <code class="task__id"></code>
       </li>
     </template>
