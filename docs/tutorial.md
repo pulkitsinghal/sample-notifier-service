@@ -138,14 +138,25 @@ rate limiting.
 That is a bounded functional proof of the sample's scale-out design. It is not
 a load, chaos, or production failover test.
 
-## 6. Read the retry policy
+## 6. Prove retries recover—or stop
 
 `src/queue.js` gives each job three attempts with exponential backoff. In
 BullMQ, a worker exception moves the job through the retry policy; the final
 failure is retained for inspection and emitted as a generic browser update.
 
 The sample processor only waits and returns a string, so the interactive path
-does not intentionally fail. In a real processor:
+does not intentionally fail. The integration test uses local-only deterministic
+processors instead: one fails twice and succeeds on the third attempt; another
+fails all three attempts. Run it with the Compose test command from step 5 and
+inspect `worker failures use the configured exponential retry policy` in
+`test/integration/notifier.test.js`.
+
+The recovered task preserves `attemptsMade: 3`. The exhausted task preserves a
+generic terminal error without exposing the processor's internal exception.
+This proves the bounded retry and failure-state contract without adding a
+magic failure command to the public API.
+
+In a real processor:
 
 - throw an `Error` for a retryable failure;
 - make the operation idempotent or use an idempotency key;

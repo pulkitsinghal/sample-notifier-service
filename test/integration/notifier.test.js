@@ -237,14 +237,18 @@ integrationTest(
       isProduction: false,
       logger,
     };
-    let processorCalls = 0;
+    const processorCalls = new Map();
 
     const api = await createNotifierApi({ ...shared, port: 0 });
     const worker = await createTaskWorker({
       ...shared,
       processor: async (job) => {
-        processorCalls += 1;
-        if (processorCalls < 3) {
+        const calls = (processorCalls.get(job.id) ?? 0) + 1;
+        processorCalls.set(job.id, calls);
+        if (
+          job.data.message === "permanent failure" ||
+          calls < 3
+        ) {
           throw new Error("synthetic retryable failure");
         }
         return {
@@ -283,9 +287,36 @@ integrationTest(
         value.status === "completed" &&
         value.attemptsMade === 3,
     );
-    assert.equal(processorCalls, 3);
+    assert.equal(processorCalls.get(created.taskId), 3);
     assert.equal(task.attemptsMade, 3);
     assert.equal(task.result.summary, "Recovered: retryable task");
+
+    const failedResponse = await fetch(`${url}/api/tasks`, {
+      method: "POST",
+      headers: {
+        Cookie: sessionCookie,
+        Origin: url,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ message: "permanent failure" }),
+    });
+    assert.equal(failedResponse.status, 202);
+    const failed = await failedResponse.json();
+
+    const exhausted = await waitForTask(
+      url,
+      sessionCookie,
+      failed.taskId,
+      (value) =>
+        value.status === "failed" &&
+        value.attemptsMade === 3,
+    );
+    assert.equal(processorCalls.get(failed.taskId), 3);
+    assert.equal(exhausted.result, null);
+    assert.equal(
+      exhausted.error,
+      "Task failed after all retry attempts.",
+    );
   },
 );
 
