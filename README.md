@@ -100,6 +100,21 @@ The [guided tutorial](docs/tutorial.md) walks through:
 - the exact security boundary of the anonymous demo session; and
 - the provider-neutral production identity contract.
 
+## Adopt or evaluate it
+
+- [Architecture notes](docs/architecture.md) preserve the original teaching
+  intent and explain why the 2016 design is obsolete.
+- [Migration and rollback](docs/migration.md) maps the old contracts to v2 and
+  gives a cutover and recovery procedure.
+- [Production guide](docs/production.md) defines the identity, Redis, delivery,
+  scaling, and pre-deployment boundaries.
+- [Privacy and data handling](docs/privacy.md) inventories stored and transient
+  data, retention limits, and safe tutorial inputs.
+- [Security policy](SECURITY.md) describes supported versions and private
+  vulnerability reporting.
+- [Changelog](CHANGELOG.md) separates the legacy demo, v2 release, and
+  unreleased safeguards.
+
 ## Validate
 
 Unit tests need Node 24:
